@@ -38,68 +38,59 @@
           1. Classify the outcome from the updater marker, systemd state and
              journals: **broken**, **warning** or **clean**.
           2. **broken:** notify with `hermes send --to all` (short summary),
-             **then** file the incident with `neo-incident-report` (below).
+             **then** file the incident with `send-report` (below).
              Skipping the report on a broken outcome is a procedure failure.
           3. **warning:** notify only; do **not** report.
           4. **clean:** do nothing.
-          5. Never invent tokens. If `neo-incident-report` exits 3 (token
-             missing or placeholder), say so in the notification and stop.
+          5. Never look for or invent tokens: `send-report` has none and needs
+             none. If it exits 3 (not configured) or 4 (rate limited), say so
+             in the notification and stop.
 
-          ## Report (no secrets on the command line)
-          Write the payload to a temp file and pipe it to the helper. The helper
-          reads the endpoint, token file, reporter id and runtime overrides from
-          `/etc/neo-reporter/config.json`, adds `reporter_id` and `machine`, and
-          sends the Bearer token (from `/run/neo-reporter/ingest.token`) via a 0600 header file.
+          ## Report
+          `send-report` hands the report to the local reporter service over
+          `/run/neo-reporter/submit.sock`; the service adds the reporter id,
+          the machine name and who sent it, and POSTs it with the ingest
+          token, which only that service can read. Text comes from the
+          arguments or stdin (max 64 KiB).
 
           ```bash
-          jq -n \
-            --arg report_hash "$REPORT_HASH" \
-            --arg neo_version "$NEO_VERSION" \
-            --arg unit "$UNIT" \
-            --arg logs_excerpt "$LOGS_EXCERPT" \
-            --arg severity "$SEVERITY" \
-            --arg target_hint "$TARGET_HINT" \
-            '{report_hash: $report_hash, neo_version: $neo_version, unit: $unit,
-              logs_excerpt: $logs_excerpt, severity: $severity, target_hint: $target_hint}' \
-            > /tmp/neo-incident.json
-          neo-incident-report --file /tmp/neo-incident.json
-          rm -f /tmp/neo-incident.json
+          journalctl -u "$UNIT" -n 80 --no-pager | tail -c 20000 \
+            | send-report --severity error --unit "$UNIT" \
+                --title "$UNIT failed after the update" --kind update
           ```
 
-          `neo-incident-report --dry-run --file …` prints the resolved endpoint,
-          the reporter id, the token state (present/placeholder/missing) and the
-          body, without sending.
+          Prints `incident #<id> filed (status open)`, or `already on the
+          board` for a repeat of the same report (deduplicated by
+          `report_hash`). For full control send an incident JSON object:
 
-          ## Payload fields
-          | Field | Required | Notes |
-          |-------|----------|-------|
-          | `report_hash` | yes | Stable id for this incident (e.g. sha256 of unit + neo_version + head of the log excerpt, or the updater run id). Used for dedup. |
-          | `neo_version` | yes | Neo / generation hint (`neo --version`, generation path). |
-          | `unit` | yes | Failed unit or workflow (`neo-auto-update`, `neo activate`, flake input name, …). |
-          | `logs_excerpt` | yes | Short tail of the relevant journal / updater `.log`. Truncate; strip secrets. |
-          | `severity` | yes | `info`, `warning`, `error` or `critical`. A hard update/activate failure is `error` or `critical`. |
-          | `target_hint` | yes | What broke / where to look (unit, flake input, component). |
-          | `machine` | no | Defaults to `hostname -s`. |
+          ```bash
+          jq -n --arg unit "$UNIT" --arg logs "$LOGS_EXCERPT" --arg hint "$TARGET_HINT" \
+            '{unit: $unit, logs_excerpt: $logs, severity: "error", target_hint: $hint}' \
+            | send-report --json
+          ```
+
+          Optional JSON fields: `report_hash` (stable id, default: hash of
+          machine + unit + title + text), `neo_version` (default: the running
+          generation), `kind`. `--dry-run` shows the body the service would
+          send and the token state (present/placeholder/missing) without
+          posting.
+
+          Exit codes: 0 filed or duplicate, 1 endpoint/transport error,
+          2 invalid or too large, 3 not configured, 4 rate limited.
 
           ## This machine
           - Endpoint: ${endpointText}${lib.optionalString (cfg.overridesFile != null) " (an `ingest_url` in `${cfg.overridesFile}` wins)"}
-          - Token: `/run/neo-reporter/ingest.token` (root:hermes 0440, copied by `neo-reporter-token` from ${
-            if cfg.token != null
-            then "`services.reporter.token`"
-            else if cfg.tokenFile != null
-            then "`${cfg.tokenFile}`"
-            else "(not set)"
-          }). If it is missing, `sudo systemctl start neo-reporter-token` recreates it.
-          - Never print, paste or store the token (chat, notifications, MEMORY, skill notes).
+          - Token: held by `neo-reporter-submit` (systemd credential, root only). You never need it.
+          - `neo-incident-report` is a deprecated alias for `send-report --json --file …`.
 
           ## Pitfalls
           - Truncate logs; redact API keys, SSH keys and `.env` contents before reporting.
-          - One report per incident; reuse the same `report_hash` for the same failure.
-          - Tell the operator only that an incident was filed (HTTP status and `report_hash`).
+          - One report per incident; the same text and unit reuse the same `report_hash`.
+          - Tell the operator only that an incident was filed (incident id or `report_hash`).
 
           ## Verification
-          - `neo-incident-report --dry-run --file <payload>` shows `token: present` and the expected endpoint.
-          - A real report is only for confirmed failures; expect HTTP 2xx.
+          - `echo test | send-report --dry-run` shows `"token": "present"` and the expected endpoint.
+          - A real report is only for confirmed failures (or an operator-requested test).
         '';
       };
     in

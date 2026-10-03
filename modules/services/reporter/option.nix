@@ -24,7 +24,7 @@
               token = mkOption {
                 type = types.nullOr types.str;
                 default = null;
-                description = "Bearer token for the endpoint. Read from settings.toml at activation (never put into Nix) and written to /run/neo-reporter/ingest.token (root:hermes 0440). Wins over tokenFile. A value starting with 'replace-' means: notify locally, do not POST.";
+                description = "Bearer token for the endpoint. Read from settings.toml at activation (never put into Nix) and staged as a root-only systemd credential (/run/neo-reporter/creds/token, 0400) for the reporter socket service; no user (hermes included) can read it, send-report never sees it. Wins over tokenFile. A value starting with 'replace-' means: do not POST.";
                 rank = 20;
               };
 
@@ -32,7 +32,7 @@
                 type = types.nullOr types.str;
                 default = null;
                 example = "/var/neo/DATA/AppData/credentials/ops/ingest.token";
-                description = "Alternative to token: a file with the token on its first line, any owner/mode (root copies it to /run/neo-reporter/ingest.token, root:hermes 0440, on every activation and whenever the file changes).";
+                description = "Alternative to token: a file with the token on its first line, any owner/mode (root stages it as the 0400 root credential on every activation and whenever the file changes). Stricter than token: the value never lands in /etc/neo/settings.toml.";
                 rank = 21;
               };
 
@@ -46,7 +46,7 @@
               overridesFile = mkOption {
                 type = types.nullOr types.str;
                 default = null;
-                description = "Optional JSON file read at report time. Keys ingest_url/ops_ingest_url replace endpoint; reporter_id/repo_slug/customer_repo_slug replace reporterId.";
+                description = "Optional JSON file (any owner/mode; root copies the relevant keys at activation). Keys ingest_url/ops_ingest_url replace endpoint; reporter_id/repo_slug/customer_repo_slug replace reporterId.";
                 rank = 40;
               };
 
@@ -72,7 +72,8 @@
                 failed updates/activations and POSTs broken ones to an incident
                 endpoint (for example an autofix.neo desk), with a Bearer token
                 read from a file. No containers; installs a Hermes skill and a
-                small helper (neo-incident-report).
+                small CLI (send-report) that any local user can call; a
+                sandboxed socket service holds the token.
               '';
               projectUrl = "https://github.com/heimcloud/reporter.neo";
               githubUrl = "https://github.com/heimcloud/reporter.neo";

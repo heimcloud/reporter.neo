@@ -70,6 +70,8 @@
     });
     c = on.config;
     sys = c.systemd.services;
+    sock = c.systemd.sockets.neo-reporter-submit;
+    submitUnit = sys."neo-reporter-submit@";
     skill = c.neo.services.reporter.skill.conf;
     rc = builtins.fromJSON c.environment.etc."neo-reporter/config.json".text;
     offSys = off.config.systemd.services;
@@ -77,28 +79,45 @@
     failed = n: lib.filter (a: !a.assertion) n.config.assertions;
     expect = [
       ["skill name" (skill.name == "legacy-ingest-name")]
-      ["skill mentions helper" (lib.hasInfix "neo-incident-report" skill.content)]
+      ["skill uses send-report" (lib.hasInfix "send-report" skill.content && !(lib.hasInfix "ingest.token" skill.content))]
       ["skill has no platforms line" (!(lib.hasInfix "platforms:" skill.content))]
       [
-        "runtime config"
+        "runtime config has no secrets or secret paths"
         (rc
           == {
             endpoint = "https://autofix.example.net/api/incidents";
-            tokenFile = "/run/neo-reporter/ingest.token";
             reporterId = "rid-test";
-            overridesFile = "/var/lib/reporter-test/meta.json";
+            socket = "/run/neo-reporter/submit.sock";
           })
       ]
-      ["token unit copies tokenFile" (lib.hasInfix "--source /var/lib/reporter-test/ingest.token" sys.neo-reporter-token.serviceConfig.ExecStart && lib.hasInfix "--group hermes" sys.neo-reporter-token.serviceConfig.ExecStart)]
-      ["token dir root:hermes 0750" (lib.elem "d /run/neo-reporter 0750 root hermes -" c.systemd.tmpfiles.rules)]
+      ["token unit stages creds from tokenFile + overrides" (let x = sys.neo-reporter-token.serviceConfig.ExecStart; in lib.hasInfix "--source /var/lib/reporter-test/ingest.token" x && lib.hasInfix "--dest-dir /run/neo-reporter/creds" x && lib.hasInfix "--overrides /var/lib/reporter-test/meta.json" x)]
+      ["run dir 0755, creds dir 0700 root" (lib.elem "d /run/neo-reporter 0755 root root -" c.systemd.tmpfiles.rules && lib.elem "d /run/neo-reporter/creds 0700 root root -" c.systemd.tmpfiles.rules)]
       ["token activation" (c.system.activationScripts ? neo-reporter-token)]
       ["path unit watches tokenFile" (c.systemd.paths.neo-reporter-token.pathConfig.PathChanged == "/var/lib/reporter-test/ingest.token")]
-      ["supervise wants token unit" (lib.elem "neo-reporter-token.service" sys.neo-hermes-supervise-system-update.wants && lib.elem "neo-reporter-token.service" sys.neo-hermes-supervise-docker-update.after)]
-      ["helper on the Hermes gateway PATH" (lib.any (p: (p.name or "") == "neo-incident-report") c.services.hermes-agent.extraPackages && lib.any (p: lib.hasInfix "neo-incident-report" (toString p)) sys.hermes-agent.path)]
+      ["socket: 0666, Accept, bounded" (let
+          sc = sock.socketConfig;
+        in
+          sc.ListenStream == "/run/neo-reporter/submit.sock" && sc.SocketMode == "0666" && sc.Accept == true && sc.MaxConnections == 16 && sc.MaxConnectionsPerSource == 4 && sc.TriggerLimitIntervalSec == 0 && lib.elem "sockets.target" sock.wantedBy && (sock.wants or []) == [] && (sock.after or []) == [])]
+      ["submit: dynamic user, token only via LoadCredential" (let
+          sc = submitUnit.serviceConfig;
+        in
+          sc.DynamicUser && sc.User == "neo-reporter" && lib.elem "token:/run/neo-reporter/creds/token" sc.LoadCredential && lib.elem "overrides.json:/run/neo-reporter/creds/overrides.json" sc.LoadCredential && sc.StandardInput == "socket" && sc.StandardOutput == "socket" && lib.hasSuffix "/bin/neo-reporter-submit" sc.ExecStart)]
+      ["submit: sandbox" (let
+          sc = submitUnit.serviceConfig;
+        in
+          sc.ProtectSystem == "strict" && sc.ProtectHome && sc.PrivateTmp && sc.PrivateDevices && sc.NoNewPrivileges && sc.RestrictAddressFamilies == ["AF_INET" "AF_INET6" "AF_UNIX"] && sc.CapabilityBoundingSet == "" && sc.RestrictSUIDSGID && sc.MemoryDenyWriteExecute && sc.ProtectKernelTunables && sc.SystemCallArchitectures == "native" && sc.UMask == "0077")]
+      ["submit: timeouts + state" (let
+          sc = submitUnit.serviceConfig;
+        in
+          sc.RuntimeMaxSec == 60 && sc.StateDirectory == "neo-reporter" && submitUnit.unitConfig.CollectMode == "inactive-or-failed" && submitUnit.environment.SSL_CERT_FILE == "/etc/ssl/certs/ca-certificates.crt")]
+      ["supervise wants the socket, send-report on its PATH" (lib.elem "neo-reporter-submit.socket" sys.neo-hermes-supervise-system-update.wants && lib.elem "neo-reporter-submit.socket" sys.neo-hermes-supervise-docker-update.after && lib.any (p: lib.hasInfix "send-report" (toString p)) sys.neo-hermes-supervise-system-update.path && lib.any (p: lib.hasInfix "send-report" (toString p)) sys.neo-hermes-supervise-docker-update.path)]
+      ["send-report + alias on the Hermes gateway PATH" (lib.all (n: lib.any (p: (p.name or "") == n) c.services.hermes-agent.extraPackages) ["send-report" "neo-incident-report"] && lib.any (p: lib.hasInfix "send-report" (toString p)) sys.hermes-agent.path)]
+      ["send-report + alias on the system PATH" (lib.all (n: lib.any (p: (p.name or "") == n) c.environment.systemPackages) ["send-report" "neo-incident-report"])]
       ["token only: no failed assertions" (failed tokenOnly == [])]
       ["token only: no source arg, no path unit" (!(lib.hasInfix "--source" tc.systemd.services.neo-reporter-token.serviceConfig.ExecStart) && !(tc.systemd.paths ? neo-reporter-token))]
-      ["token never in Nix text" (!(lib.hasInfix "test-only-not-a-secret" (tc.systemd.services.neo-reporter-token.serviceConfig.ExecStart + tc.environment.etc."neo-reporter/config.json".text + tc.neo.services.reporter.skill.conf.content + tc.system.activationScripts.neo-reporter-token.text)))]
-      ["off: no token unit" (!(offSys ? neo-reporter-token))]
+      ["token only: no overrides arg" (!(lib.hasInfix "--overrides" tc.systemd.services.neo-reporter-token.serviceConfig.ExecStart))]
+      ["token never in Nix text" (!(lib.hasInfix "test-only-not-a-secret" (tc.systemd.services.neo-reporter-token.serviceConfig.ExecStart + tc.environment.etc."neo-reporter/config.json".text + tc.neo.services.reporter.skill.conf.content + tc.system.activationScripts.neo-reporter-token.text + builtins.toJSON tc.systemd.services."neo-reporter-submit@".serviceConfig + builtins.toJSON tc.systemd.sockets.neo-reporter-submit.socketConfig)))]
+      ["off: no token unit, no socket, no submit service" (!(offSys ? neo-reporter-token) && !(off.config.systemd.sockets ? neo-reporter-submit) && !(offSys ? "neo-reporter-submit@"))]
       ["system supervise preloads skill" (lib.hasInfix "neo-reporter-supervise system" sys.neo-hermes-supervise-system-update.serviceConfig.ExecStart)]
       ["docker supervise preloads skill" (lib.hasInfix "neo-reporter-supervise docker" sys.neo-hermes-supervise-docker-update.serviceConfig.ExecStart)]
       ["off: stock supervise untouched" (!(lib.hasInfix "neo-reporter" offSys.neo-hermes-supervise-system-update.serviceConfig.ExecStart))]
@@ -117,22 +136,38 @@
       ]
     ];
     bad = lib.filter (e: !(builtins.elemAt e 1)) expect;
-    helper = pkgs.callPackage ../pkgs/neo-incident-report.nix {};
+    sendReport = pkgs.callPackage ../pkgs/send-report.nix {};
+    submit = pkgs.callPackage ../pkgs/neo-reporter-submit.nix {};
+    alias = pkgs.callPackage ../pkgs/neo-incident-report.nix {send-report = sendReport;};
     tokenTool = pkgs.callPackage ../pkgs/neo-reporter-token.nix {};
   in {
-    packages.neo-incident-report = helper;
-    packages.neo-reporter-token = tokenTool;
-    packages.default = helper;
+    packages = {
+      send-report = sendReport;
+      neo-reporter-submit = submit;
+      neo-incident-report = alias;
+      neo-reporter-token = tokenTool;
+      default = sendReport;
+      # Not in `checks` (needs KVM): nix build .#vm-test
+      vm-test = import ../test/vm.nix {inherit pkgs self inputs;};
+    };
     checks = {
       report-script =
         pkgs.runCommand "reporter-script-tests" {
-          nativeBuildInputs = [pkgs.bash pkgs.jq pkgs.curl pkgs.python3 pkgs.hostname pkgs.coreutils pkgs.shellcheck];
+          nativeBuildInputs = [pkgs.bash pkgs.python3 pkgs.coreutils];
         } ''
           cp -r ${self}/scripts ${self}/test .
-          shellcheck -S warning scripts/neo-incident-report.sh
-          bash test/report.test.sh
-          REPORT_BIN=${helper}/bin/neo-incident-report bash test/report.test.sh
+          export HOME=$TMPDIR
+          python3 -m unittest discover -s test -p 'test_*.py' -v
+          SUBMIT_BIN=${submit}/bin/neo-reporter-submit SEND_BIN=${sendReport}/bin/send-report \
+            python3 -m unittest discover -s test -p 'test_*.py'
+          bash test/token.test.sh
           TOKEN_BIN=${tokenTool}/bin/neo-reporter-token bash test/token.test.sh
+          # alias maps to send-report --json (dry run against no socket → exit 3)
+          set +e
+          echo '{"logs_excerpt":"x"}' | NEO_REPORTER_SOCKET=$TMPDIR/none.sock ${alias}/bin/neo-incident-report --dry-run --file - 2> alias.err
+          rc=$?
+          set -e
+          [ "$rc" = 3 ] && grep -q "not available" alias.err
           touch $out
         '';
       eval =

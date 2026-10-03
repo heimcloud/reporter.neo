@@ -22,6 +22,7 @@
         && (hermes.superviseUpdates or false);
 
       hermesPkg = config.services.hermes-agent.package;
+      sendReport = pkgs.callPackage ../../../pkgs/send-report.nix {};
       dockerManifest = "${config.neo.services.docker-updater.appdata}/last.json";
       systemManifest = "${config.neo.services.system-updater.appdata}/last.json";
       systemUpdaterOn = config.neo.services.system-updater.enabled or false;
@@ -71,7 +72,7 @@
         Classify as broken, warning, or clean using systemd state and logs.
         - clean: do not send Telegram; do not report
         - warning: notify via `hermes send --to all`; do not report; do not roll back
-        - broken: notify via `hermes send --to all`; **must** report the incident per /${skill} (`neo-incident-report`)
+        - broken: notify via `hermes send --to all`; **must** report the incident per /${skill} (`send-report`)
           ${
           if kind == "docker"
           then "- for each broken image, run `sudo neo-docker-rollback --image '<repo:tag>'` then confirm the unit is active; mention the rollback in the notification"
@@ -147,9 +148,9 @@
         # Replace Neo's stock supervise ExecStart (which only -s neo-update-supervisor).
         systemd.services.neo-hermes-supervise-system-update = mkIf systemUpdaterOn {
           description = lib.mkForce "Hermes supervision of neo-auto-update (preload ${skill})";
-          after = ["network-online.target" "neo-auto-update.service" "neo-reporter-token.service"];
-          wants = ["network-online.target" "neo-reporter-token.service"];
-          path = [pkgs.jq pkgs.systemd pkgs.sudo hermesPkg "/run/current-system/sw"];
+          after = ["network-online.target" "neo-auto-update.service" "neo-reporter-submit.socket"];
+          wants = ["network-online.target" "neo-reporter-submit.socket"];
+          path = [sendReport pkgs.jq pkgs.systemd pkgs.sudo hermesPkg "/run/current-system/sw"];
           environment = superviseEnv;
           serviceConfig = {
             Type = "oneshot";
@@ -163,9 +164,9 @@
 
         systemd.services.neo-hermes-supervise-docker-update = mkIf dockerUpdaterOn {
           description = lib.mkForce "Hermes supervision of neo-docker-updater (preload ${skill})";
-          after = ["network-online.target" "neo-docker-updater.service" "neo-reporter-token.service"];
-          wants = ["network-online.target" "neo-reporter-token.service"];
-          path = [pkgs.jq pkgs.systemd pkgs.sudo pkgs.docker hermesPkg "/run/current-system/sw"];
+          after = ["network-online.target" "neo-docker-updater.service" "neo-reporter-submit.socket"];
+          wants = ["network-online.target" "neo-reporter-submit.socket"];
+          path = [sendReport pkgs.jq pkgs.systemd pkgs.sudo pkgs.docker hermesPkg "/run/current-system/sw"];
           environment = superviseEnv;
           serviceConfig = {
             Type = "oneshot";
