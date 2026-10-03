@@ -24,21 +24,33 @@ Settings → core → plugins → add:
 github:heimcloud/reporter.neo
 ```
 
-Then configure `services.reporter` (web UI or `settings.toml`):
+Then configure `services.reporter` in `settings.toml`:
 
 ```toml
 [services.reporter]
 enabled = true
 endpoint = "https://autofix.example.net/api/incidents"
-tokenFile = "/var/neo/DATA/AppData/reporter/ingest.token"
+token = "…"                             # or: tokenFile = "/path/to/file"
 # reporterId = "my-box"                 # optional, sent as reporter_id
 # overridesFile = "/path/to/meta.json"  # optional runtime overrides
 # supervise = true                      # preload into update supervision
 # skillName = "incident-reporter"
 ```
 
-Put the token (first line of the file) in place yourself, readable by the
-`hermes` user, e.g. `install -m 0440 -o root -g hermes token.txt …`.
+The reporter never reads `token` / `tokenFile` directly: a root oneshot
+(`neo-reporter-token`, run on every activation, before every supervise run and,
+for `tokenFile`, whenever that file changes) writes it to
+`/run/neo-reporter/ingest.token`, owner `root:hermes`, mode `0440`. `token` is
+read from `/etc/neo/settings.toml` at run time, so it is never part of a Nix
+derivation or unit; `tokenFile` may have any owner and mode (e.g. a
+homeserver-only `0600` file). `token` wins when both are set. Note that Neo
+keeps `settings.toml` itself on the host (`/etc/neo/settings.toml`); use
+`tokenFile` if the token must not be in that file.
+
+`neo-incident-report` is on the PATH of the update supervision units and of
+the Hermes gateway (and the `hermes` user profile), so operator-requested
+reports from chat work too.
+
 Supervision preloading needs `services.hermes.enabled` and
 `services.hermes.superviseUpdates`.
 
@@ -48,7 +60,8 @@ Supervision preloading needs `services.hermes.enabled` and
 |---|---|---|
 | `enabled` | `false` | Turn the reporter on. |
 | `endpoint` | `null` | Full ingest URL (POST). Required unless `overridesFile` provides one. |
-| `tokenFile` | `null` | Bearer token file. Missing, empty or `replace-…` → notify only, no POST (exit 3). |
+| `token` | `null` | Bearer token (settings.toml). Copied to `/run/neo-reporter/ingest.token` (root:hermes 0440). Missing, empty or `replace-…` → notify only, no POST (exit 3). |
+| `tokenFile` | `null` | Alternative: file with the token on its first line, any owner (root copies it). |
 | `reporterId` | `null` | Optional id for this box, sent as `reporter_id` (and legacy `customer_repo_slug`). Defaults to `unknown`. |
 | `overridesFile` | `null` | JSON read at report time: `ingest_url` / `ops_ingest_url` replace `endpoint`; `reporter_id` / `repo_slug` / `customer_repo_slug` replace `reporterId`. |
 | `supervise` | `true` | Preload the skill in Neo's update supervision units. |

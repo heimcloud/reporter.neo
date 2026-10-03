@@ -49,7 +49,7 @@
           Write the payload to a temp file and pipe it to the helper. The helper
           reads the endpoint, token file, reporter id and runtime overrides from
           `/etc/neo-reporter/config.json`, adds `reporter_id` and `machine`, and
-          sends the Bearer token from a 0600 header file.
+          sends the Bearer token (from `/run/neo-reporter/ingest.token`) via a 0600 header file.
 
           ```bash
           jq -n \
@@ -83,11 +83,13 @@
 
           ## This machine
           - Endpoint: ${endpointText}${lib.optionalString (cfg.overridesFile != null) " (an `ingest_url` in `${cfg.overridesFile}` wins)"}
-          - Token file: ${
-            if cfg.tokenFile != null
+          - Token: `/run/neo-reporter/ingest.token` (root:hermes 0440, copied by `neo-reporter-token` from ${
+            if cfg.token != null
+            then "`services.reporter.token`"
+            else if cfg.tokenFile != null
             then "`${cfg.tokenFile}`"
             else "(not set)"
-          }
+          }). If it is missing, `sudo systemctl start neo-reporter-token` recreates it.
           - Never print, paste or store the token (chat, notifications, MEMORY, skill notes).
 
           ## Pitfalls

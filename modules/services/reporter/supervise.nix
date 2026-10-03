@@ -147,8 +147,8 @@
         # Replace Neo's stock supervise ExecStart (which only -s neo-update-supervisor).
         systemd.services.neo-hermes-supervise-system-update = mkIf systemUpdaterOn {
           description = lib.mkForce "Hermes supervision of neo-auto-update (preload ${skill})";
-          after = ["network-online.target" "neo-auto-update.service"];
-          wants = ["network-online.target"];
+          after = ["network-online.target" "neo-auto-update.service" "neo-reporter-token.service"];
+          wants = ["network-online.target" "neo-reporter-token.service"];
           path = [pkgs.jq pkgs.systemd pkgs.sudo hermesPkg "/run/current-system/sw"];
           environment = superviseEnv;
           serviceConfig = {
@@ -163,8 +163,8 @@
 
         systemd.services.neo-hermes-supervise-docker-update = mkIf dockerUpdaterOn {
           description = lib.mkForce "Hermes supervision of neo-docker-updater (preload ${skill})";
-          after = ["network-online.target" "neo-docker-updater.service"];
-          wants = ["network-online.target"];
+          after = ["network-online.target" "neo-docker-updater.service" "neo-reporter-token.service"];
+          wants = ["network-online.target" "neo-reporter-token.service"];
           path = [pkgs.jq pkgs.systemd pkgs.sudo pkgs.docker hermesPkg "/run/current-system/sw"];
           environment = superviseEnv;
           serviceConfig = {

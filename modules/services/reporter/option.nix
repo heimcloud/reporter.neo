@@ -21,12 +21,19 @@
                 rank = 10;
               };
 
+              token = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                description = "Bearer token for the endpoint. Read from settings.toml at activation (never put into Nix) and written to /run/neo-reporter/ingest.token (root:hermes 0440). Wins over tokenFile. A value starting with 'replace-' means: notify locally, do not POST.";
+                rank = 20;
+              };
+
               tokenFile = mkOption {
                 type = types.nullOr types.str;
                 default = null;
-                example = "/var/neo/DATA/AppData/reporter/ingest.token";
-                description = "File with the Bearer token for the endpoint (first line). Missing, empty or a value starting with 'replace-' means: notify locally, do not POST.";
-                rank = 20;
+                example = "/var/neo/DATA/AppData/credentials/ops/ingest.token";
+                description = "Alternative to token: a file with the token on its first line, any owner/mode (root copies it to /run/neo-reporter/ingest.token, root:hermes 0440, on every activation and whenever the file changes).";
+                rank = 21;
               };
 
               reporterId = mkOption {
