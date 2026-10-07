@@ -47,7 +47,8 @@ any local user ── send-report ──▶ /run/neo-reporter/submit.sock (0666)
 ```
 
 - **Token.** A root oneshot (`neo-reporter-token`; it runs on every activation,
-  before the socket starts and, for `tokenFile`, whenever that file changes)
+  before the socket starts and whenever `tokenFile` or `overridesFile`
+  changes, so `ingest_url` / `repo_slug` edits apply without a switch)
   stages the token at `/run/neo-reporter/creds/token`, mode `0400 root`, in a
   `0700 root` directory. Only `neo-reporter-submit@.service` gets it, through
   `LoadCredential=`. No user, `hermes` included, can read it, and
@@ -56,12 +57,19 @@ any local user ── send-report ──▶ /run/neo-reporter/submit.sock (0666)
   have any owner and mode (e.g. a homeserver-only `0600` file). `token` wins
   when both are set. Neo keeps `settings.toml` on the host
   (`/etc/neo/settings.toml`), so use `tokenFile` if the token must not be in
-  that file.
+  that file. Rapid changes cannot degrade the system: the path unit is
+  trigger-limited (5 per 10 s) and the oneshot start-limited (10 per minute);
+  past the limit staging just waits for the next change or switch.
+  Note: right after `neo activate`, `journalctl -u neo-reporter-token` can be
+  empty. That is expected: the activation script staged the token itself, and
+  the unit only logs when the path unit or an operator starts it. Check
+  `sudo ls -l /run/neo-reporter/creds/` instead.
 - **Caller.** The service identifies the caller with `SO_PEERCRED`. It records
   them as `submitted_by` (`root`, `hermes` or `uid-<n>`, never a personal user
   name), together with the machine name and `reporter_id`.
-- **Limits.** One request per connection, at most 64 KiB, read within 10 s.
-  The HTTP POST has a 20 s timeout and the instance 60 s overall. Each uid
+- **Limits.** One request per connection, at most 64 KiB, read within 5 s.
+  The HTTP POST has a 20 s timeout and the instance 30 s overall (so a
+  stuck connection holds one of the 4 per-uid slots for at most 30 s). Each uid
   gets a token bucket of 5 reports, plus one more every 2 minutes. The socket
   allows 16 connections (4 per uid) and has no trigger limit, so a flood
   cannot put it into a failed state.

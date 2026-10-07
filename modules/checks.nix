@@ -93,7 +93,8 @@
       ["token unit stages creds from tokenFile + overrides" (let x = sys.neo-reporter-token.serviceConfig.ExecStart; in lib.hasInfix "--source /var/lib/reporter-test/ingest.token" x && lib.hasInfix "--dest-dir /run/neo-reporter/creds" x && lib.hasInfix "--overrides /var/lib/reporter-test/meta.json" x)]
       ["run dir 0755, creds dir 0700 root" (lib.elem "d /run/neo-reporter 0755 root root -" c.systemd.tmpfiles.rules && lib.elem "d /run/neo-reporter/creds 0700 root root -" c.systemd.tmpfiles.rules)]
       ["token activation" (c.system.activationScripts ? neo-reporter-token)]
-      ["path unit watches tokenFile" (c.systemd.paths.neo-reporter-token.pathConfig.PathChanged == "/var/lib/reporter-test/ingest.token")]
+      ["path unit watches tokenFile + overridesFile, trigger-limited" (let pc = c.systemd.paths.neo-reporter-token.pathConfig; in pc.PathChanged == ["/var/lib/reporter-test/ingest.token" "/var/lib/reporter-test/meta.json"] && pc.TriggerLimitIntervalSec == "10s" && pc.TriggerLimitBurst == 5)]
+      ["token service start-limited" (let u = sys.neo-reporter-token.unitConfig; in u.StartLimitIntervalSec == 60 && u.StartLimitBurst == 10)]
       ["socket: 0666, Accept, bounded" (let
           sc = sock.socketConfig;
         in
@@ -109,7 +110,7 @@
       ["submit: timeouts + state" (let
           sc = submitUnit.serviceConfig;
         in
-          sc.RuntimeMaxSec == 60 && sc.StateDirectory == "neo-reporter" && submitUnit.unitConfig.CollectMode == "inactive-or-failed" && submitUnit.environment.SSL_CERT_FILE == "/etc/ssl/certs/ca-certificates.crt")]
+          sc.RuntimeMaxSec == 30 && sc.StateDirectory == "neo-reporter" && submitUnit.unitConfig.CollectMode == "inactive-or-failed" && submitUnit.environment.SSL_CERT_FILE == "/etc/ssl/certs/ca-certificates.crt")]
       ["supervise wants the socket, send-report on its PATH" (lib.elem "neo-reporter-submit.socket" sys.neo-hermes-supervise-system-update.wants && lib.elem "neo-reporter-submit.socket" sys.neo-hermes-supervise-docker-update.after && lib.any (p: lib.hasInfix "send-report" (toString p)) sys.neo-hermes-supervise-system-update.path && lib.any (p: lib.hasInfix "send-report" (toString p)) sys.neo-hermes-supervise-docker-update.path)]
       ["send-report + alias on the Hermes gateway PATH" (lib.all (n: lib.any (p: (p.name or "") == n) c.services.hermes-agent.extraPackages) ["send-report" "neo-incident-report"] && lib.any (p: lib.hasInfix "send-report" (toString p)) sys.hermes-agent.path)]
       ["send-report + alias on the system PATH" (lib.all (n: lib.any (p: (p.name or "") == n) c.environment.systemPackages) ["send-report" "neo-incident-report"])]

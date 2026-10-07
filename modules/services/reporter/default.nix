@@ -40,6 +40,7 @@
       inherit (cfg) endpoint reporterId;
       socket = socketPath;
     };
+    watched = lib.filter (f: f != null) [cfg.tokenFile cfg.overridesFile];
     hasHermesAgent = options ? services && options.services ? hermes-agent;
     tools = [sendReport alias];
   in {
@@ -70,23 +71,31 @@
           text = "${materialize} || true";
         };
 
-        # Same as a oneshot; the path
-        # unit re-runs it when tokenFile changes, and operators can
-        # `systemctl start neo-reporter-token` after an edit.
+        # Same as a oneshot; the path unit re-runs it when tokenFile or the
+        # overridesFile (ingest_url / repo_slug) changes, and operators can
+        # `systemctl start neo-reporter-token` after an edit. Rapid changes
+        # are bounded twice: the path unit's trigger limit and the service's
+        # start limit (a burst only delays staging, the next switch re-stages).
         systemd.services.neo-reporter-token = {
           description = "Stage the incident reporter token as a root-only credential";
+          unitConfig = {
+            StartLimitIntervalSec = 60;
+            StartLimitBurst = 10;
+          };
           serviceConfig = {
             Type = "oneshot";
             ExecStart = materialize;
             UMask = "0077";
           };
         };
-        systemd.paths.neo-reporter-token = lib.mkIf (cfg.tokenFile != null) {
-          description = "Watch the incident reporter token file";
+        systemd.paths.neo-reporter-token = lib.mkIf (watched != []) {
+          description = "Watch the incident reporter token / overrides file";
           wantedBy = ["multi-user.target"];
           pathConfig = {
-            PathChanged = cfg.tokenFile;
+            PathChanged = watched;
             Unit = "neo-reporter-token.service";
+            TriggerLimitIntervalSec = "10s";
+            TriggerLimitBurst = 5;
           };
         };
 
@@ -132,7 +141,9 @@
               "token:${credsDir}/token"
               "overrides.json:${credsDir}/overrides.json"
             ];
-            RuntimeMaxSec = 60;
+            # read 5 s + HTTP 20 s fit; a stuck connection holds a per-uid slot
+            # (MaxConnectionsPerSource) for at most 30 s.
+            RuntimeMaxSec = 30;
             # sandbox
             NoNewPrivileges = true;
             ProtectSystem = "strict";

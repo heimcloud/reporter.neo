@@ -28,7 +28,7 @@ import urllib.error
 import urllib.request
 
 MAX_REQUEST = int(os.environ.get("NEO_REPORTER_MAX_BYTES", 64 * 1024))
-READ_TIMEOUT = float(os.environ.get("NEO_REPORTER_READ_TIMEOUT", 10))
+READ_TIMEOUT = float(os.environ.get("NEO_REPORTER_READ_TIMEOUT", 5))
 HTTP_TIMEOUT = float(os.environ.get("NEO_REPORTER_HTTP_TIMEOUT", 20))
 RATE_BURST = int(os.environ.get("NEO_REPORTER_RATE_BURST", 5))
 RATE_PERIOD = float(os.environ.get("NEO_REPORTER_RATE_PERIOD", 120))

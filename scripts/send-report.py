@@ -22,7 +22,7 @@ import sys
 
 SOCKET = os.environ.get("NEO_REPORTER_SOCKET", "/run/neo-reporter/submit.sock")
 MAX_REQUEST = int(os.environ.get("NEO_REPORTER_MAX_BYTES", 64 * 1024))
-TIMEOUT = float(os.environ.get("NEO_REPORTER_CLIENT_TIMEOUT", 60))
+TIMEOUT = float(os.environ.get("NEO_REPORTER_CLIENT_TIMEOUT", 35))
 EXIT = {"posted": 0, "duplicate": 0, "dry_run": 0, "http_error": 1, "invalid": 2,
         "too_large": 2, "not_configured": 3, "rate_limited": 4}
 
