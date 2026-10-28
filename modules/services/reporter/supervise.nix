@@ -33,18 +33,18 @@
         then null
         else toString (builtins.head hermes.telegramAllowedUserId);
 
-      superviseEnv =
-        lib.filterAttrs (_: v: v != null && v != "") {
-          HOME = hermes.stateDir;
-          HERMES_HOME = "${hermes.stateDir}/.hermes";
-          TELEGRAM_BOT_TOKEN = hermes.telegramBotToken;
-          HERMES_GATEWAY_TOKEN = hermes.gatewayToken;
-          TELEGRAM_ALLOWED_USERS = lib.concatStringsSep "," (map toString hermes.telegramAllowedUserId);
-          TELEGRAM_HOME_CHANNEL = telegramHomeChannel;
-        }
-        // lib.neo.mkHermesLlmEnv {
-          inherit (hermes.llm) provider apiKey;
-        };
+      # Non-secret half only. The secrets (Telegram bot token, gateway token,
+      # LLM key) come from Neo's own EnvironmentFile on these units
+      # (/run/neo-secrets/rendered/hermes-supervise.env, rendered at
+      # activation); `environment` here merges into Neo's units, so a secret
+      # in it would land in the store-visible unit (and trip Neo's leak
+      # assertion on placeholders).
+      superviseEnv = lib.filterAttrs (_: v: v != null && v != "") {
+        HOME = hermes.stateDir;
+        HERMES_HOME = "${hermes.stateDir}/.hermes";
+        TELEGRAM_ALLOWED_USERS = lib.concatStringsSep "," (map toString hermes.telegramAllowedUserId);
+        TELEGRAM_HOME_CHANNEL = telegramHomeChannel;
+      };
 
       # Single preloaded skill (classify + notify + mandatory report).
       promptFor = kind: ''

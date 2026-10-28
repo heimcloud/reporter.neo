@@ -73,15 +73,12 @@
 
         # Same as a oneshot; the path unit re-runs it when tokenFile or the
         # overridesFile (ingest_url / repo_slug) changes, and operators can
-        # `systemctl start neo-reporter-token` after an edit. Rapid changes
-        # are bounded twice: the path unit's trigger limit and the service's
-        # start limit (a burst only delays staging, the next switch re-stages).
+        # `systemctl start neo-reporter-token` after an edit. No start limit
+        # on the oneshot (a start-limit hit would leave it failed until a
+        # reset); rapid changes are bounded by the path unit's trigger limit.
         systemd.services.neo-reporter-token = {
           description = "Stage the incident reporter token as a root-only credential";
-          unitConfig = {
-            StartLimitIntervalSec = 60;
-            StartLimitBurst = 10;
-          };
+          unitConfig.StartLimitIntervalSec = 0;
           serviceConfig = {
             Type = "oneshot";
             ExecStart = materialize;
@@ -95,7 +92,7 @@
             PathChanged = watched;
             Unit = "neo-reporter-token.service";
             TriggerLimitIntervalSec = "10s";
-            TriggerLimitBurst = 5;
+            TriggerLimitBurst = 50;
           };
         };
 

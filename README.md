@@ -57,9 +57,13 @@ any local user ── send-report ──▶ /run/neo-reporter/submit.sock (0666)
   have any owner and mode (e.g. a homeserver-only `0600` file). `token` wins
   when both are set. Neo keeps `settings.toml` on the host
   (`/etc/neo/settings.toml`), so use `tokenFile` if the token must not be in
-  that file. Rapid changes cannot degrade the system: the path unit is
-  trigger-limited (5 per 10 s) and the oneshot start-limited (10 per minute);
-  past the limit staging just waits for the next change or switch.
+  that file. Rapid changes are bounded by the path unit's trigger limit (50
+  per 10 s); the oneshot itself has no start limit. Past the trigger limit
+  systemd puts `neo-reporter-token.path` into a failed state and it stops
+  watching: staging does **not** resume on the next change, only on the next
+  switch/boot (the activation script re-stages) or after
+  `sudo systemctl restart neo-reporter-token.path`. The submit socket and
+  the already staged token keep working meanwhile.
   Note: right after `neo activate`, `journalctl -u neo-reporter-token` can be
   empty. That is expected: the activation script staged the token itself, and
   the unit only logs when the path unit or an operator starts it. Check

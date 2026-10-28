@@ -68,6 +68,30 @@
         supervise = false;
       };
     });
+    # Hermes secrets as Neo secret placeholders (sops backend shape): Neo's
+    # leak assertion fails if any reaches a unit `environment`.
+    ph = p: "@NEO_SECRET:services/hermes/${p}@";
+    placeholders = mkHost (lib.recursiveUpdate base {
+      services.hermes = {
+        telegramBotToken = ph "telegramBotToken";
+        gatewayToken = ph "gatewayToken";
+        telegramAllowedUserId = [12345];
+        llm = {
+          provider = "openrouter";
+          apiKey = ph "llm/apiKey";
+        };
+      };
+      services.reporter = {
+        enabled = true;
+        endpoint = "https://autofix.example.net/api/incidents";
+        tokenFile = "/var/lib/reporter-test/ingest.token";
+      };
+    });
+    pc = placeholders.config;
+    hasSecrets = pc.neo ? core && pc.neo.core ? secrets;
+    leakFailures = lib.filter (a: !a.assertion && lib.hasPrefix "neo secrets: a secret placeholder" a.message) pc.assertions;
+    secretKeys = ["TELEGRAM_BOT_TOKEN" "HERMES_GATEWAY_TOKEN" "OPENROUTER_API_KEY"];
+    superviseUnits = ["neo-hermes-supervise-system-update" "neo-hermes-supervise-docker-update"];
     c = on.config;
     sys = c.systemd.services;
     sock = c.systemd.sockets.neo-reporter-submit;
@@ -93,8 +117,29 @@
       ["token unit stages creds from tokenFile + overrides" (let x = sys.neo-reporter-token.serviceConfig.ExecStart; in lib.hasInfix "--source /var/lib/reporter-test/ingest.token" x && lib.hasInfix "--dest-dir /run/neo-reporter/creds" x && lib.hasInfix "--overrides /var/lib/reporter-test/meta.json" x)]
       ["run dir 0755, creds dir 0700 root" (lib.elem "d /run/neo-reporter 0755 root root -" c.systemd.tmpfiles.rules && lib.elem "d /run/neo-reporter/creds 0700 root root -" c.systemd.tmpfiles.rules)]
       ["token activation" (c.system.activationScripts ? neo-reporter-token)]
-      ["path unit watches tokenFile + overridesFile, trigger-limited" (let pc = c.systemd.paths.neo-reporter-token.pathConfig; in pc.PathChanged == ["/var/lib/reporter-test/ingest.token" "/var/lib/reporter-test/meta.json"] && pc.TriggerLimitIntervalSec == "10s" && pc.TriggerLimitBurst == 5)]
-      ["token service start-limited" (let u = sys.neo-reporter-token.unitConfig; in u.StartLimitIntervalSec == 60 && u.StartLimitBurst == 10)]
+      ["path unit watches tokenFile + overridesFile, trigger-limited" (let pc = c.systemd.paths.neo-reporter-token.pathConfig; in pc.PathChanged == ["/var/lib/reporter-test/ingest.token" "/var/lib/reporter-test/meta.json"] && pc.TriggerLimitIntervalSec == "10s" && pc.TriggerLimitBurst == 50)]
+      ["token service not start-limited" (let u = sys.neo-reporter-token.unitConfig; in u.StartLimitIntervalSec == 0 && !(u ? StartLimitBurst))]
+      [
+        "supervise units: no secret in environment (reporter preload on; Neo with secrets, older Neo set them itself)"
+        (!hasSecrets || lib.all (u: let
+          e = pc.systemd.services.${u}.environment;
+        in
+          lib.hasInfix "neo-reporter-supervise" pc.systemd.services.${u}.serviceConfig.ExecStart
+          && lib.all (k: !(e ? ${k})) secretKeys
+          && !(lib.any (v: lib.hasInfix "@NEO_SECRET" (toString v)) (lib.attrValues e))
+          && e.HERMES_HOME or null != null
+          && e.TELEGRAM_ALLOWED_USERS or null == "12345")
+        superviseUnits)
+      ]
+      [
+        "neo secret leak assertion passes with Hermes secrets as placeholders"
+        (leakFailures == [])
+      ]
+      [
+        "supervise units keep Neo's rendered EnvironmentFile (Neo with secrets)"
+        (!hasSecrets
+          || lib.all (u: lib.hasInfix "hermes-supervise.env" (toString pc.systemd.services.${u}.serviceConfig.EnvironmentFile)) superviseUnits)
+      ]
       ["socket: 0666, Accept, bounded" (let
           sc = sock.socketConfig;
         in
@@ -177,6 +222,8 @@
           pkgs.runCommand "reporter-eval-tests" {} ''
             echo ${lib.escapeShellArg (builtins.toJSON (map builtins.head expect))} > $out
             echo ${builtins.unsafeDiscardStringContext on.config.system.build.toplevel.drvPath} >> $out
+            # Forces every assertion (Neo's secret-leak guard included) on the placeholder host.
+            echo ${builtins.unsafeDiscardStringContext pc.system.build.toplevel.drvPath} >> $out
           ''
         else throw "reporter eval checks failed: ${builtins.toJSON (map builtins.head bad)}";
     };
