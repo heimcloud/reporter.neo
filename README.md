@@ -88,7 +88,12 @@ and the Hermes gateway PATH. `neo-incident-report` remains for one release as a
 deprecated alias for `send-report --json --file …`.
 
 Supervision preloading needs `services.hermes.enabled` and
-`services.hermes.superviseUpdates`.
+`services.hermes.superviseUpdates`. It only replaces the units' `ExecStart`
+(plus PATH and ordering on the submit socket); it sets no environment. HOME,
+HERMES_HOME and the Telegram variables (allowed users, allowed group chats,
+home channel) are Neo's own, and the secrets come from Neo's EnvironmentFile.
+`nix flake check` fails if this flake defines an env key Neo also sets on any
+unit.
 
 ## Options
 
@@ -165,6 +170,7 @@ another plugin) is deduplicated.
 
 ```bash
 nix flake check                                   # unit/e2e tests + NixOS eval tests
+nix flake check --override-input neo github:madebydamo/neo/dev  # same against Neo dev
 python3 -m unittest discover -s test -p 'test_*.py'  # sender/service tests only
 bash test/token.test.sh                           # token staging tests
 nix build .#vm-test -L                            # NixOS VM test (needs KVM)

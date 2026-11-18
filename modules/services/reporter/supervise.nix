@@ -4,6 +4,12 @@
 # bodies into the system prompt, so the procedure cannot be skipped.
 # (A future Neo option for extra supervise skills would make the mkForce
 # override unnecessary.)
+#
+# No `environment` here: Neo sets the whole supervise env on these units
+# (HOME, HERMES_HOME, Telegram users/groups/home channel; secrets through its
+# EnvironmentFile). Any key set here as well would merge with Neo's and
+# conflict as soon as the values differ; the flake check fails if this module
+# defines an env key Neo also sets.
 {...}: {
   flake.modules.nixos.reporter-supervise = {
     config,
@@ -27,24 +33,6 @@
       systemManifest = "${config.neo.services.system-updater.appdata}/last.json";
       systemUpdaterOn = config.neo.services.system-updater.enabled or false;
       dockerUpdaterOn = config.neo.services.docker-updater.enabled or false;
-
-      telegramHomeChannel =
-        if hermes.telegramAllowedUserId == []
-        then null
-        else toString (builtins.head hermes.telegramAllowedUserId);
-
-      # Non-secret half only. The secrets (Telegram bot token, gateway token,
-      # LLM key) come from Neo's own EnvironmentFile on these units
-      # (/run/neo-secrets/rendered/hermes-supervise.env, rendered at
-      # activation); `environment` here merges into Neo's units, so a secret
-      # in it would land in the store-visible unit (and trip Neo's leak
-      # assertion on placeholders).
-      superviseEnv = lib.filterAttrs (_: v: v != null && v != "") {
-        HOME = hermes.stateDir;
-        HERMES_HOME = "${hermes.stateDir}/.hermes";
-        TELEGRAM_ALLOWED_USERS = lib.concatStringsSep "," (map toString hermes.telegramAllowedUserId);
-        TELEGRAM_HOME_CHANNEL = telegramHomeChannel;
-      };
 
       # Single preloaded skill (classify + notify + mandatory report).
       promptFor = kind: ''
@@ -151,7 +139,6 @@
           after = ["network-online.target" "neo-auto-update.service" "neo-reporter-submit.socket"];
           wants = ["network-online.target" "neo-reporter-submit.socket"];
           path = [sendReport pkgs.jq pkgs.systemd pkgs.sudo hermesPkg "/run/current-system/sw"];
-          environment = superviseEnv;
           serviceConfig = {
             Type = "oneshot";
             User = "hermes";
@@ -167,7 +154,6 @@
           after = ["network-online.target" "neo-docker-updater.service" "neo-reporter-submit.socket"];
           wants = ["network-online.target" "neo-reporter-submit.socket"];
           path = [sendReport pkgs.jq pkgs.systemd pkgs.sudo pkgs.docker hermesPkg "/run/current-system/sw"];
-          environment = superviseEnv;
           serviceConfig = {
             Type = "oneshot";
             User = "hermes";

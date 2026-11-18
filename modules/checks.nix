@@ -75,7 +75,9 @@
       services.hermes = {
         telegramBotToken = ph "telegramBotToken";
         gatewayToken = ph "gatewayToken";
-        telegramAllowedUserId = [12345];
+        # A user and a (synthetic) group chat: newer Neo splits groups out
+        # into TELEGRAM_GROUP_ALLOWED_CHATS.
+        telegramAllowedUserId = [12345 (-1001)];
         llm = {
           provider = "openrouter";
           apiKey = ph "llm/apiKey";
@@ -88,6 +90,20 @@
       };
     });
     pc = placeholders.config;
+    # Per unit, the env keys both this flake and Neo define (from the module
+    # system's own definition list, so nothing here is a hardcoded key list).
+    # Neo merges `environment` per key, so any shared key conflicts as soon as
+    # the values differ.
+    defsFrom = src: defs: lib.filter (d: lib.hasPrefix (toString src) d.file) defs;
+    envKeys = defs: lib.unique (lib.concatMap (d: lib.attrNames d.value) defs);
+    envOverlap = host:
+      lib.filterAttrs (_: ks: ks != []) (lib.mapAttrs (_: m: let
+        defs = m.configuration.options.environment.definitionsWithLocations;
+        ours = envKeys (defsFrom self defs);
+        neos = envKeys (defsFrom inputs.neo defs);
+      in
+        lib.intersectLists ours neos)
+      host.options.systemd.services.valueMeta.attrs);
     hasSecrets = pc.neo ? core && pc.neo.core ? secrets;
     leakFailures = lib.filter (a: !a.assertion && lib.hasPrefix "neo secrets: a secret placeholder" a.message) pc.assertions;
     secretKeys = ["TELEGRAM_BOT_TOKEN" "HERMES_GATEWAY_TOKEN" "OPENROUTER_API_KEY"];
@@ -121,15 +137,31 @@
       ["token service not start-limited" (let u = sys.neo-reporter-token.unitConfig; in u.StartLimitIntervalSec == 0 && !(u ? StartLimitBurst))]
       [
         "supervise units: no secret in environment (reporter preload on; Neo with secrets, older Neo set them itself)"
-        (!hasSecrets || lib.all (u: let
+        (!hasSecrets
+          || lib.all (u: let
+            e = pc.systemd.services.${u}.environment;
+          in
+            lib.hasInfix "neo-reporter-supervise" pc.systemd.services.${u}.serviceConfig.ExecStart
+            && lib.all (k: !(e ? ${k})) secretKeys
+            && !(lib.any (v: lib.hasInfix "@NEO_SECRET" (toString v)) (lib.attrValues e))
+            && e.HERMES_HOME or null != null)
+          superviseUnits)
+      ]
+      [
+        "supervise units: Telegram env is Neo's own (users only; groups split out where Neo does)"
+        (lib.all (u: let
           e = pc.systemd.services.${u}.environment;
+          gw = pc.services.hermes-agent.environment;
         in
-          lib.hasInfix "neo-reporter-supervise" pc.systemd.services.${u}.serviceConfig.ExecStart
-          && lib.all (k: !(e ? ${k})) secretKeys
-          && !(lib.any (v: lib.hasInfix "@NEO_SECRET" (toString v)) (lib.attrValues e))
-          && e.HERMES_HOME or null != null
-          && e.TELEGRAM_ALLOWED_USERS or null == "12345")
+          e.TELEGRAM_ALLOWED_USERS or null
+          == gw.TELEGRAM_ALLOWED_USERS or "12345,-1001"
+          && (!(gw ? TELEGRAM_GROUP_ALLOWED_CHATS)
+            || (e.TELEGRAM_ALLOWED_USERS == "12345" && e.TELEGRAM_GROUP_ALLOWED_CHATS or null == gw.TELEGRAM_GROUP_ALLOWED_CHATS)))
         superviseUnits)
+      ]
+      [
+        "reporter sets no env key Neo also sets on any unit"
+        (envOverlap placeholders == {} && envOverlap on == {})
       ]
       [
         "neo secret leak assertion passes with Hermes secrets as placeholders"
@@ -140,22 +172,34 @@
         (!hasSecrets
           || lib.all (u: lib.hasInfix "hermes-supervise.env" (toString pc.systemd.services.${u}.serviceConfig.EnvironmentFile)) superviseUnits)
       ]
-      ["socket: 0666, Accept, bounded" (let
+      [
+        "socket: 0666, Accept, bounded"
+        (let
           sc = sock.socketConfig;
         in
-          sc.ListenStream == "/run/neo-reporter/submit.sock" && sc.SocketMode == "0666" && sc.Accept == true && sc.MaxConnections == 16 && sc.MaxConnectionsPerSource == 4 && sc.TriggerLimitIntervalSec == 0 && lib.elem "sockets.target" sock.wantedBy && (sock.wants or []) == [] && (sock.after or []) == [])]
-      ["submit: dynamic user, token only via LoadCredential" (let
+          sc.ListenStream == "/run/neo-reporter/submit.sock" && sc.SocketMode == "0666" && sc.Accept == true && sc.MaxConnections == 16 && sc.MaxConnectionsPerSource == 4 && sc.TriggerLimitIntervalSec == 0 && lib.elem "sockets.target" sock.wantedBy && (sock.wants or []) == [] && (sock.after or []) == [])
+      ]
+      [
+        "submit: dynamic user, token only via LoadCredential"
+        (let
           sc = submitUnit.serviceConfig;
         in
-          sc.DynamicUser && sc.User == "neo-reporter" && lib.elem "token:/run/neo-reporter/creds/token" sc.LoadCredential && lib.elem "overrides.json:/run/neo-reporter/creds/overrides.json" sc.LoadCredential && sc.StandardInput == "socket" && sc.StandardOutput == "socket" && lib.hasSuffix "/bin/neo-reporter-submit" sc.ExecStart)]
-      ["submit: sandbox" (let
+          sc.DynamicUser && sc.User == "neo-reporter" && lib.elem "token:/run/neo-reporter/creds/token" sc.LoadCredential && lib.elem "overrides.json:/run/neo-reporter/creds/overrides.json" sc.LoadCredential && sc.StandardInput == "socket" && sc.StandardOutput == "socket" && lib.hasSuffix "/bin/neo-reporter-submit" sc.ExecStart)
+      ]
+      [
+        "submit: sandbox"
+        (let
           sc = submitUnit.serviceConfig;
         in
-          sc.ProtectSystem == "strict" && sc.ProtectHome && sc.PrivateTmp && sc.PrivateDevices && sc.NoNewPrivileges && sc.RestrictAddressFamilies == ["AF_INET" "AF_INET6" "AF_UNIX"] && sc.CapabilityBoundingSet == "" && sc.RestrictSUIDSGID && sc.MemoryDenyWriteExecute && sc.ProtectKernelTunables && sc.SystemCallArchitectures == "native" && sc.UMask == "0077")]
-      ["submit: timeouts + state" (let
+          sc.ProtectSystem == "strict" && sc.ProtectHome && sc.PrivateTmp && sc.PrivateDevices && sc.NoNewPrivileges && sc.RestrictAddressFamilies == ["AF_INET" "AF_INET6" "AF_UNIX"] && sc.CapabilityBoundingSet == "" && sc.RestrictSUIDSGID && sc.MemoryDenyWriteExecute && sc.ProtectKernelTunables && sc.SystemCallArchitectures == "native" && sc.UMask == "0077")
+      ]
+      [
+        "submit: timeouts + state"
+        (let
           sc = submitUnit.serviceConfig;
         in
-          sc.RuntimeMaxSec == 30 && sc.StateDirectory == "neo-reporter" && submitUnit.unitConfig.CollectMode == "inactive-or-failed" && submitUnit.environment.SSL_CERT_FILE == "/etc/ssl/certs/ca-certificates.crt")]
+          sc.RuntimeMaxSec == 30 && sc.StateDirectory == "neo-reporter" && submitUnit.unitConfig.CollectMode == "inactive-or-failed" && submitUnit.environment.SSL_CERT_FILE == "/etc/ssl/certs/ca-certificates.crt")
+      ]
       ["supervise wants the socket, send-report on its PATH" (lib.elem "neo-reporter-submit.socket" sys.neo-hermes-supervise-system-update.wants && lib.elem "neo-reporter-submit.socket" sys.neo-hermes-supervise-docker-update.after && lib.any (p: lib.hasInfix "send-report" (toString p)) sys.neo-hermes-supervise-system-update.path && lib.any (p: lib.hasInfix "send-report" (toString p)) sys.neo-hermes-supervise-docker-update.path)]
       ["send-report + alias on the Hermes gateway PATH" (lib.all (n: lib.any (p: (p.name or "") == n) c.services.hermes-agent.extraPackages) ["send-report" "neo-incident-report"] && lib.any (p: lib.hasInfix "send-report" (toString p)) sys.hermes-agent.path)]
       ["send-report + alias on the system PATH" (lib.all (n: lib.any (p: (p.name or "") == n) c.environment.systemPackages) ["send-report" "neo-incident-report"])]
